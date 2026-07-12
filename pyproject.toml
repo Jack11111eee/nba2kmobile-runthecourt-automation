@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools==83.0.0", "wheel==0.47.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rtc-bot"
+version = "0.1.0"
+description = "Local macOS automation for NBA 2K Mobile Run The Court"
+readme = "README.md"
+requires-python = ">=3.13"
+keywords = ["macos", "iphone-mirroring", "computer-vision", "automation"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: MacOS X",
+  "Operating System :: MacOS",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "numpy>=2.0",
+  "Pillow>=11.0",
+  "scipy>=1.14",
+  "pyobjc-framework-Cocoa==12.2.1; sys_platform == 'darwin'",
+  "pyobjc-framework-ApplicationServices==12.2.1; sys_platform == 'darwin'",
+  "pyobjc-framework-Quartz==12.2.1; sys_platform == 'darwin'",
+]
+
+[project.urls]
+Repository = "https://github.com/Jack11111eee/nba2kmobile-runthecourt-automation"
+
+[project.scripts]
+rtc-bot = "rtc_bot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rtc_bot*"]
+
+[tool.setuptools.package-data]
+rtc_bot = ["assets/reference/*.jpg"]

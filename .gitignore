@@ -1,0 +1,56 @@
+# Local environments and secrets
+.venv/
+venv/
+env/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Packaging
+build/
+dist/
+*.egg-info/
+pip-wheel-metadata/
+
+# Runtime data can contain account names and full screen captures
+runtime/
+*.jsonl
+*.log
+
+# Source recordings and ad-hoc captures
+*.mov
+*.mp4
+*.m4v
+*.avi
+*.mkv
+recordings/
+captures/
+
+# Editors and macOS
+.DS_Store
+._*
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
