@@ -1,5 +1,7 @@
 # NBA 2K Mobile Run The Court Automation
 
+[English](README.en.md) | **简体中文**
+
 一个仅在本机运行的 macOS 命令行工具。它通过 Apple 的 `iPhone Mirroring`
 窗口读取 NBA 2K Mobile 画面，使用本地模板、颜色和布局规则识别状态，并且只在
 白名单页面发送鼠标点击。
