@@ -5,14 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "rtc-bot"
 version = "0.1.0"
-description = "Local macOS automation for NBA 2K Mobile Run The Court"
+description = "Local macOS and Windows automation for NBA 2K Mobile Run The Court"
 readme = "README.md"
 requires-python = ">=3.13"
-keywords = ["macos", "iphone-mirroring", "computer-vision", "automation"]
+keywords = ["macos", "windows", "iphone", "computer-vision", "automation"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: MacOS X",
   "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
@@ -22,6 +23,12 @@ dependencies = [
   "pyobjc-framework-Cocoa==12.2.1; sys_platform == 'darwin'",
   "pyobjc-framework-ApplicationServices==12.2.1; sys_platform == 'darwin'",
   "pyobjc-framework-Quartz==12.2.1; sys_platform == 'darwin'",
+]
+
+[project.optional-dependencies]
+ios-usb = [
+  "cryptography==44.0.1",
+  "pymobiledevice3==9.34.0",
 ]
 
 [project.urls]

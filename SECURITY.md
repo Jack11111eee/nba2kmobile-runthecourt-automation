@@ -1,9 +1,11 @@
 # Security and Privacy
 
-This project has no network integration and does not require API keys.
+This project has no cloud runtime integration and does not require API keys.
+The optional USB backend communicates with a locally connected iPhone. Its
+setup tool may access the network when obtaining Apple developer support files.
 
 Runtime logs and screenshots may contain account names, game resources,
-notifications, or other content visible in the iPhone Mirroring window. Do not
+notifications, or other content visible on the captured iPhone screen. Do not
 attach the `runtime/` directory, recordings, or unredacted screenshots to a
 public issue.
 
