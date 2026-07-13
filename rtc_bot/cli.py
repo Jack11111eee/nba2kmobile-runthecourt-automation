@@ -5,9 +5,9 @@ import sys
 import time
 from pathlib import Path
 
+from rtc_bot.bridge import BACKEND_CHOICES, create_bridge, is_nonblank
 from rtc_bot.config import BotConfig
 from rtc_bot.engine import DecisionEngine
-from rtc_bot.macos import MacOSBridge, is_nonblank
 from rtc_bot.model import ActionKind, ScreenState
 from rtc_bot.runtime import SessionLogger, SleepInhibitor, notify
 from rtc_bot.vision import ScreenDetector, crop_content
@@ -19,8 +19,21 @@ def build_parser() -> argparse.ArgumentParser:
         description="NBA 2K Mobile Run The Court local automation",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("doctor", help="check permissions and mirror capture")
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="check permissions and device capture"
+    )
     run_parser = subparsers.add_parser("run", help="start automation")
+    for command_parser in (doctor_parser, run_parser):
+        command_parser.add_argument(
+            "--backend",
+            choices=BACKEND_CHOICES,
+            default="auto",
+            help="capture/control backend (default: platform-specific auto)",
+        )
+        command_parser.add_argument(
+            "--udid",
+            help="target iPhone UDID for the ios-usb backend",
+        )
     run_parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -34,73 +47,75 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def print_permissions(screen_capture: bool, event_posting: bool) -> None:
-    print(f"screen capture permission: {'OK' if screen_capture else 'MISSING'}")
-    print(f"accessibility/event permission: {'OK' if event_posting else 'MISSING'}")
-
-
-def run_doctor(config: BotConfig) -> int:
-    bridge = MacOSBridge(config)
-    if not bridge.available:
-        print("PyObjC is not installed. Install the project dependencies first.")
+def run_doctor(
+    config: BotConfig,
+    *,
+    backend: str = "auto",
+    udid: str | None = None,
+) -> int:
+    try:
+        bridge = create_bridge(config, backend=backend, udid=udid)
+    except ValueError as exc:
+        print(exc)
         return 2
 
-    permissions = bridge.permissions(request=True)
-    print_permissions(permissions.screen_capture, permissions.event_posting)
-    if not permissions.screen_capture or not permissions.event_posting:
+    start = bridge.start(request_permissions=True, require_control=True)
+    for message in start.messages:
+        print(message)
+    if not start.ready:
+        return 2
+
+    try:
+        capture = bridge.capture()
+        if capture is None or not is_nonblank(capture.image):
+            print(f"device capture: FAILED ({bridge.last_error})")
+            return 2
+
+        config.doctor_dir.mkdir(parents=True, exist_ok=True)
+        path = config.doctor_dir / "device-capture.png"
+        capture.image.save(path)
+        detector = ScreenDetector(config)
+        detection = detector.detect(capture.image)
         print(
-            "Permissions were requested. Enable Screen Recording and "
-            "Accessibility for the terminal application running the bot, "
-            "then re-run doctor."
+            f"device capture: OK ({capture.backend}, "
+            f"{capture.image.width}x{capture.image.height})"
         )
-        return 2
-
-    window = bridge.find_mirror_window()
-    if window is None:
-        print("iPhone Mirroring window: NOT FOUND")
-        print("Open iPhone Mirroring, connect the phone, and keep the window visible.")
-        return 2
-
-    print(
-        "iPhone Mirroring window: "
-        f"id={window.window_id} "
-        f"bounds={window.bounds.width:.0f}x{window.bounds.height:.0f}"
-        f"+{window.bounds.x:.0f}+{window.bounds.y:.0f}"
-    )
-    capture = bridge.capture(window)
-    if capture is None or not is_nonblank(capture.image):
-        print("mirror capture: FAILED or BLACK")
-        return 2
-
-    config.doctor_dir.mkdir(parents=True, exist_ok=True)
-    path = config.doctor_dir / "mirror-capture.png"
-    capture.image.save(path)
-    detector = ScreenDetector(config)
-    detection = detector.detect(capture.image)
-    print(
-        f"mirror capture: OK ({capture.backend}, "
-        f"{capture.image.width}x{capture.image.height})"
-    )
-    print(
-        f"detected state: {detection.state.value} "
-        f"confidence={detection.confidence:.2f}"
-    )
-    print(f"saved capture: {path.resolve()}")
+        print(
+            f"detected state: {detection.state.value} "
+            f"confidence={detection.confidence:.2f}"
+        )
+        print(f"saved capture: {path.resolve()}")
+    finally:
+        bridge.close()
 
     return 0
 
 
-def run_loop(config: BotConfig, *, dry_run: bool, debug: bool) -> int:
-    bridge = MacOSBridge(config)
-    if not bridge.available:
-        print("PyObjC is not installed. Install the project dependencies first.")
+def run_loop(
+    config: BotConfig,
+    *,
+    dry_run: bool,
+    debug: bool,
+    backend: str = "auto",
+    udid: str | None = None,
+) -> int:
+    try:
+        bridge = create_bridge(config, backend=backend, udid=udid)
+    except ValueError as exc:
+        print(exc)
         return 2
 
-    permissions = bridge.permissions(request=False)
-    if not permissions.screen_capture or (not dry_run and not permissions.event_posting):
-        print_permissions(permissions.screen_capture, permissions.event_posting)
-        print("Run `python3 -m rtc_bot doctor` and grant the requested permissions.")
+    start = bridge.start(
+        request_permissions=False,
+        require_control=not dry_run,
+    )
+    if not start.ready:
+        for message in start.messages:
+            print(message)
+        print("Run `python -m rtc_bot doctor` after fixing the reported issue.")
         return 2
+    for message in start.messages:
+        print(message)
 
     detector = ScreenDetector(config)
     engine = DecisionEngine(config)
@@ -118,26 +133,16 @@ def run_loop(config: BotConfig, *, dry_run: bool, debug: bool) -> int:
         try:
             while True:
                 now = time.monotonic()
-                window = bridge.find_mirror_window()
-                if window is None:
-                    key = ("window-missing",)
-                    if key != last_console_key:
-                        print("[wait] iPhone Mirroring window is unavailable")
-                        notify("RTC Bot waiting", "iPhone Mirroring window is unavailable")
-                        last_console_key = key
-                    next_tick = time.monotonic()
-                    time.sleep(config.capture_interval_seconds)
-                    continue
-
-                capture = bridge.capture(window)
+                capture = bridge.capture()
                 if capture is None:
-                    key = ("capture-failed",)
+                    reason = bridge.last_error or "device capture failed"
+                    key = ("capture-failed", reason)
                     if key != last_console_key:
-                        print("[wait] mirror capture failed or returned a black frame")
-                        notify("RTC Bot waiting", "Mirror capture failed or returned black")
+                        print(f"[wait] {reason}")
+                        notify("RTC Bot waiting", reason)
                         last_console_key = key
                     next_tick = time.monotonic()
-                    time.sleep(config.capture_interval_seconds)
+                    bridge.wait(config.capture_interval_seconds)
                     continue
 
                 detection = detector.detect(capture.image)
@@ -203,22 +208,33 @@ def run_loop(config: BotConfig, *, dry_run: bool, debug: bool) -> int:
                         _, content_rect = crop_content(capture.image)
                         if not bridge.click(capture, content_rect, action.point):
                             logger.save_capture(capture.image, "click-cancelled")
-                            print("[wait] click cancelled because the window changed")
+                            print(
+                                "[wait] click cancelled because the capture "
+                                "source changed or rejected the touch"
+                            )
 
                 next_tick += config.capture_interval_seconds
-                time.sleep(max(0.0, next_tick - time.monotonic()))
+                bridge.wait(max(0.0, next_tick - time.monotonic()))
         except KeyboardInterrupt:
             print("\nrtc-bot stopped by user")
             return 0
+        finally:
+            bridge.close()
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     config = BotConfig(runtime_dir=Path.cwd() / "runtime")
     if args.command == "doctor":
-        return run_doctor(config)
+        return run_doctor(config, backend=args.backend, udid=args.udid)
     if args.command == "run":
-        return run_loop(config, dry_run=args.dry_run, debug=args.debug)
+        return run_loop(
+            config,
+            dry_run=args.dry_run,
+            debug=args.debug,
+            backend=args.backend,
+            udid=args.udid,
+        )
     return 2
 
 

@@ -2,22 +2,24 @@
 
 [English](README.en.md) | **简体中文**
 
-一个仅在本机运行的 macOS 命令行工具。它通过 Apple 的 `iPhone Mirroring`
-窗口读取 NBA 2K Mobile 画面，使用本地模板、颜色和布局规则识别状态，并且只在
-白名单页面发送鼠标点击。
+一个仅在本机运行的 macOS/Windows 命令行工具。macOS 默认通过 Apple 的
+`iPhone Mirroring` 窗口读取和控制 NBA 2K Mobile；Windows 实验性后端通过 USB
+直接获取 iPhone 截图并发送触摸。两种后端共用本地模板、颜色和布局规则，并且只
+在白名单页面执行动作。
 
 项目不会调用云端视觉模型，也不会上传截图、日志或游戏数据。
 
 > 当前状态：Alpha。已在 iPhone 15 Pro、iOS 18.6.2、中文横屏界面和
 > macOS iPhone Mirroring 环境下完成实机验证。游戏更新或 UI 变化后必须重新
-> 执行 dry-run 验证。
+> 执行 dry-run 验证。Windows 后端已通过自动化测试，但尚未完成真实
+> Windows+iPhone USB 实机验收。
 
 ## 安全设计
 
-- 所有识别都在 Mac 本地完成。
+- 所有识别都在电脑本地完成。
 - 比赛画面、自动换人、未知页面和低置信度状态不会点击。
 - 所有自动动作必须连续两帧识别一致。
-- 点击前重新检查镜像窗口 ID、位置和尺寸。
+- 点击前重新检查镜像窗口或 USB 设备身份。
 - 点击坐标必须位于归一化画面范围内。
 - 点击后等待画面变化，避免在同一页面重复操作。
 - 只有明确识别到 `WIN` 才会继续；失败结果会暂停并发送通知。
@@ -28,15 +30,26 @@
 
 ## 系统要求
 
-- 支持 iPhone Mirroring 的 Mac 和 iPhone
-- macOS 中已可正常打开并控制 iPhone Mirroring
 - Python 3.13
 - 游戏使用当前支持的中文横屏 UI
+
+macOS 镜像后端：
+
+- 支持 iPhone Mirroring 的 Mac 和 iPhone
+- macOS 中已可正常打开并控制 iPhone Mirroring
 - 终端拥有“屏幕与系统音频录制”和“辅助功能”权限
 
-该工具依赖 PyObjC，因此实时控制仅支持 macOS。离线识别测试可在其他系统运行。
+Windows USB 后端（实验性）：
 
-## 安装
+- x86-64 Windows 10 或 Windows 11
+- iOS 17.4 或更高版本的 iPhone
+- 已安装 Microsoft Store 中的 Apple Devices，以提供 USB 驱动
+- iPhone 已信任电脑并开启 Developer Mode
+- 已挂载与当前 iOS 匹配的 Developer Disk Image
+
+离线识别测试仍可在其他系统运行。
+
+## macOS 安装
 
 ```bash
 git clone https://github.com/Jack11111eee/nba2kmobile-runthecourt-automation.git
@@ -49,17 +62,39 @@ python -m pip install -r requirements.lock
 python -m pip install --no-deps -e .
 ```
 
-`requirements.lock` 用于复现已验证环境；`pyproject.toml` 保存项目的运行依赖和
-平台标记。
+`requirements.lock` 用于复现已验证的 macOS 环境；`pyproject.toml` 保存项目的
+运行依赖和平台标记。
 
-## 权限与环境检查
+## Windows 安装
+
+```powershell
+git clone https://github.com/Jack11111eee/nba2kmobile-runthecourt-automation.git
+cd nba2kmobile-runthecourt-automation
+
+py -3.13 -m venv .venv
+.venv\Scripts\activate
+python -m pip install --upgrade pip
+python -m pip install -e ".[ios-usb]"
+```
+
+连接并解锁 iPhone，在手机上选择信任电脑并开启 Developer Mode，然后挂载
+Developer Disk Image：
+
+```powershell
+python -m pymobiledevice3 mounter auto-mount
+```
+
+`pymobiledevice3` 是 GPL-3.0-or-later 的可选依赖，只在使用 `ios-usb` 后端时
+安装。
+
+## macOS 权限与检查
 
 1. 打开 iPhone Mirroring 并连接手机。
 2. 打开 NBA 2K Mobile，保持镜像窗口可见且不要最小化。
 3. 执行：
 
 ```bash
-python -m rtc_bot doctor
+python -m rtc_bot doctor --backend macos-mirroring
 ```
 
 首次运行时，macOS 会请求：
@@ -72,12 +107,22 @@ python -m rtc_bot doctor
 ```text
 screen capture permission: OK
 accessibility/event permission: OK
-iPhone Mirroring window: id=...
-mirror capture: OK
+device capture: OK
 detected state: ...
 ```
 
 检查截图保存在 `runtime/doctor/`，仅供本机诊断。
+
+## Windows 连接检查
+
+完成 Windows 安装和 DDI 挂载后执行：
+
+```powershell
+python -m rtc_bot doctor --backend ios-usb
+```
+
+成功输出应包含 USB 设备型号、iOS 版本、UDID、截图尺寸和识别状态。Windows
+默认会自动选择 `ios-usb`，显式参数便于排查配置。
 
 ## 使用
 
@@ -93,6 +138,14 @@ python -m rtc_bot run --dry-run --debug
 python -m rtc_bot run --debug
 ```
 
+在 Mac 上也可以测试与 Windows 相同的直接 USB 通道：
+
+```bash
+python -m pip install -e ".[ios-usb]"
+python -m pymobiledevice3 mounter auto-mount
+python -m rtc_bot run --backend ios-usb --dry-run --debug
+```
+
 也可以使用安装后的入口：
 
 ```bash
@@ -101,7 +154,8 @@ rtc-bot run --dry-run --debug
 rtc-bot run --debug
 ```
 
-按 `Ctrl+C` 手动停止。运行时会使用 `caffeinate` 阻止 Mac 自动睡眠。
+按 `Ctrl+C` 手动停止。运行时会使用 macOS `caffeinate` 或 Windows 电源 API
+阻止电脑自动睡眠。
 
 ## 状态策略
 
@@ -113,7 +167,7 @@ rtc-bot run --debug
 | 自动换人 | 等待游戏自行恢复 |
 | 节间奖励卡 | 等待自动翻页；5 秒不变后补点卡片中心一次 |
 | 胜利结果 | 识别到 `WIN` 后点击继续 |
-| 失败结果 | 永久暂停并发送 Mac 通知 |
+| 失败结果 | 永久暂停并发送平台提示 |
 | 未开启卡包 | 验证卡包页面结构后点击中央卡包 |
 | 背面奖励卡 | 点击左下角显示全部 |
 | 翻卡动画 | 等待 |
@@ -156,8 +210,10 @@ python tools/replay_check.py /path/to/recording.mov
 
 ```text
 rtc_bot/
+  bridge.py       跨平台后端接口和选择
   cli.py          命令行入口和运行循环
   engine.py       稳定帧、冷却、状态变化与动作决策
+  ios_device.py   iPhone USB 截图和触摸事件
   macos.py        iPhone Mirroring 窗口抓取和鼠标事件
   vision.py       本地模板、颜色和布局识别
   runtime.py      JSONL 日志、截图、通知和防休眠
@@ -173,6 +229,10 @@ tools/            离线回放与素材清理工具
 - 网络错误、能量不足、背包上限、维护和活动结束页面尚未全部获得专用素材，默认
   等待人工处理。
 - iPhone Mirroring 窗口消失、最小化、黑帧或位置在识别后变化时会取消点击。
+- Windows USB 后端尚未在真实 Windows+iPhone 环境完成验收；CI 只能验证安装、
+  导入和模拟设备流程。
+- USB 后端需要 iOS Developer Mode 和已挂载的 Developer Disk Image；手机重启
+  或 iOS 更新后可能需要重新挂载。
 - 工具不会从 NBA 2K 主菜单自动寻找并重新进入活动。
 
 ## 免责声明

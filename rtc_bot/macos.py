@@ -8,9 +8,9 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-import numpy as np
 from PIL import Image
 
+from rtc_bot.bridge import BridgeStartResult, CaptureResult, is_nonblank
 from rtc_bot.config import BotConfig
 from rtc_bot.vision import ContentRect
 
@@ -40,21 +40,9 @@ class WindowInfo:
 
 
 @dataclass(frozen=True)
-class CaptureResult:
-    image: Image.Image
-    window: WindowInfo
-    backend: str
-
-
-@dataclass(frozen=True)
 class PermissionStatus:
     screen_capture: bool
     event_posting: bool
-
-
-def is_nonblank(image: Image.Image) -> bool:
-    sample = np.asarray(image.convert("L").resize((96, 48)), dtype=np.float32)
-    return bool(sample.std() >= 4.0 and sample.max() - sample.min() >= 20.0)
 
 
 def map_normalized_point(
@@ -84,6 +72,7 @@ def map_normalized_point(
 class MacOSBridge:
     def __init__(self, config: BotConfig) -> None:
         self.config = config
+        self.last_error = ""
 
     @property
     def available(self) -> bool:
@@ -100,6 +89,35 @@ class MacOSBridge:
         if request and not event_posting:
             event_posting = bool(Quartz.CGRequestPostEventAccess())
         return PermissionStatus(screen_capture, event_posting)
+
+    def start(
+        self, *, request_permissions: bool, require_control: bool
+    ) -> BridgeStartResult:
+        if not self.available:
+            return BridgeStartResult(
+                False,
+                ("PyObjC is not installed. Install the project dependencies first.",),
+            )
+        permissions = self.permissions(request=request_permissions)
+        messages = (
+            f"screen capture permission: "
+            f"{'OK' if permissions.screen_capture else 'MISSING'}",
+            f"accessibility/event permission: "
+            f"{'OK' if permissions.event_posting else 'MISSING'}",
+        )
+        ready = permissions.screen_capture and (
+            not require_control or permissions.event_posting
+        )
+        if ready:
+            return BridgeStartResult(True, messages)
+        return BridgeStartResult(
+            False,
+            messages
+            + (
+                "Enable Screen Recording and Accessibility for the terminal "
+                "application running the bot, then re-run doctor.",
+            ),
+        )
 
     def list_windows(self) -> list[WindowInfo]:
         if not self.available:
@@ -200,7 +218,7 @@ class MacOSBridge:
             with Image.open(path) as image:
                 return image.convert("RGB")
 
-    def capture(self, window: WindowInfo) -> CaptureResult | None:
+    def _capture_window(self, window: WindowInfo) -> CaptureResult | None:
         image = self._capture_quartz(window)
         backend = "quartz"
         if image is None or not is_nonblank(image):
@@ -208,7 +226,24 @@ class MacOSBridge:
             backend = "screencapture"
         if image is None or not is_nonblank(image):
             return None
-        return CaptureResult(image=image, window=window, backend=backend)
+        return CaptureResult(
+            image=image,
+            source_id=str(window.window_id),
+            context=window,
+            backend=backend,
+        )
+
+    def capture(self) -> CaptureResult | None:
+        window = self.find_mirror_window()
+        if window is None:
+            self.last_error = "iPhone Mirroring window is unavailable"
+            return None
+        capture = self._capture_window(window)
+        if capture is None:
+            self.last_error = "mirror capture failed or returned a black frame"
+            return None
+        self.last_error = ""
+        return capture
 
     @staticmethod
     def _same_bounds(left: WindowBounds, right: WindowBounds) -> bool:
@@ -230,11 +265,14 @@ class MacOSBridge:
     ) -> bool:
         if not self.available:
             return False
+        captured_window = capture.context
+        if not isinstance(captured_window, WindowInfo):
+            return False
         current = self.find_mirror_window()
         if (
             current is None
-            or current.window_id != capture.window.window_id
-            or not self._same_bounds(current.bounds, capture.window.bounds)
+            or current.window_id != captured_window.window_id
+            or not self._same_bounds(current.bounds, captured_window.bounds)
         ):
             return False
         if (
@@ -270,3 +308,11 @@ class MacOSBridge:
             Quartz.CGEventPost(Quartz.kCGHIDEventTap, event)
             time.sleep(0.04)
         return True
+
+    @staticmethod
+    def wait(seconds: float) -> None:
+        time.sleep(seconds)
+
+    @staticmethod
+    def close() -> None:
+        return None
