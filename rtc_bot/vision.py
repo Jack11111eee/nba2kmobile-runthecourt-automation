@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -8,6 +10,7 @@ from PIL import Image, ImageFilter
 from scipy import ndimage
 
 from rtc_bot.config import BotConfig
+from rtc_bot.exceptions import classify_exception_text, recognize_text
 from rtc_bot.model import Detection, NormalizedRect, ScreenState
 
 GAME_ASPECT = 1920 / 886
@@ -324,23 +327,56 @@ class ReferenceLibrary:
 
 
 class ScreenDetector:
-    def __init__(self, config: BotConfig, reference_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        config: BotConfig,
+        reference_dir: Path | None = None,
+        *,
+        ocr_reader: Callable[[Image.Image], Iterable[str]] = recognize_text,
+    ) -> None:
         if reference_dir is None:
             reference_dir = Path(__file__).parent / "assets" / "reference"
         self.config = config
         self.library = ReferenceLibrary(reference_dir)
+        self.ocr_reader = ocr_reader
+        self._ocr_cache_key: tuple[str, tuple[int, int], bytes] | None = None
+        self._ocr_cache_texts: tuple[str, ...] = ()
+
+    def _read_text(self, image: Image.Image) -> tuple[str, ...]:
+        digest = hashlib.blake2b(image.tobytes(), digest_size=16).digest()
+        cache_key = (image.mode, image.size, digest)
+        if cache_key != self._ocr_cache_key:
+            self._ocr_cache_key = cache_key
+            self._ocr_cache_texts = tuple(self.ocr_reader(image))
+        return self._ocr_cache_texts
+
+    def _classify_unknown(
+        self, image: Image.Image, detection: Detection
+    ) -> Detection:
+        texts = self._read_text(image)
+        state = classify_exception_text(texts)
+        if state is None:
+            return detection
+        return Detection(
+            state=state,
+            confidence=1.0,
+            frame_signature=detection.frame_signature,
+            button=None,
+            reason=f"{detection.reason} ocr_exception={state.value}",
+        )
 
     def detect(self, image: Image.Image) -> Detection:
         content, _ = crop_content(image)
         signature = frame_signature(content)
         reference, distance = self.library.nearest(content)
         if reference is None:
-            return Detection(
+            detection = Detection(
                 state=ScreenState.UNKNOWN,
                 confidence=0.0,
                 frame_signature=signature,
                 reason="no reference assets",
             )
+            return self._classify_unknown(content, detection)
 
         state = reference.state
         confidence = max(0.0, 1.0 - distance / self.config.state_distance_threshold)
@@ -460,14 +496,22 @@ class ScreenDetector:
             ScreenState.QUARTER_REWARD,
             ScreenState.UNKNOWN,
             ScreenState.LOSS_RESULT,
+            ScreenState.NETWORK_ERROR,
+            ScreenState.ENERGY_SHORTAGE,
+            ScreenState.INVENTORY_FULL,
+            ScreenState.MAINTENANCE,
+            ScreenState.EVENT_ENDED,
         ) and button is None:
             reason += " button=missing"
             confidence *= 0.65
 
-        return Detection(
+        detection = Detection(
             state=state,
             confidence=confidence,
             frame_signature=signature,
             button=button,
             reason=reason,
         )
+        if detection.state == ScreenState.UNKNOWN:
+            return self._classify_unknown(content, detection)
+        return detection

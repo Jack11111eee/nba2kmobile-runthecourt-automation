@@ -22,7 +22,11 @@ def detection(state: ScreenState) -> Detection:
     )
 
 
-def action(kind: ActionKind, state: ScreenState, reason: str = "engine") -> PlannedAction:
+def action(
+    kind: ActionKind,
+    state: ScreenState,
+    reason: str = "engine",
+) -> PlannedAction:
     return PlannedAction(kind=kind, state=state, reason=reason)
 
 
@@ -207,6 +211,26 @@ class RunSessionTests(unittest.TestCase):
         self.assertEqual(1, session.losses)
         self.assertEqual(1, session.action_counts[ActionKind.PAUSE])
         self.assertEqual(0, session.action_counts[ActionKind.CLICK])
+
+    def test_exception_pause_stops_with_a_distinct_exit_code(self) -> None:
+        session = RunSession(RunPolicy(), clock=MutableClock())
+
+        decision = session.observe(
+            detection(ScreenState.NETWORK_ERROR),
+            action(
+                ActionKind.PAUSE,
+                ScreenState.NETWORK_ERROR,
+                "recognized stop state: network_error",
+            ),
+        )
+
+        self.assertTrue(decision.should_stop)
+        self.assertEqual(3, decision.exit_code)
+        self.assertEqual(ActionKind.PAUSE, decision.final_action.kind)
+        self.assertEqual(
+            "recognized stop state: network_error",
+            decision.reason,
+        )
 
     def test_policy_rejects_invalid_limits_and_loss_behavior(self) -> None:
         invalid_policies = (

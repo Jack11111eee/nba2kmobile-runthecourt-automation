@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from tempfile import TemporaryDirectory
+from unittest.mock import Mock, patch
 
 from PIL import Image, ImageDraw
 
 from rtc_bot.config import BotConfig
 from rtc_bot.model import ScreenState
-from rtc_bot.vision import ScreenDetector, find_content_rect
+from rtc_bot.vision import ReferenceLibrary, ScreenDetector, find_content_rect
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -234,6 +235,80 @@ class ScreenDetectorTests(unittest.TestCase):
         self.assertIsNotNone(detection.button, detection.reason)
         assert detection.button is not None
         self.assertAlmostEqual(0.319, detection.button.center[0], places=2)
+
+    def test_unknown_screen_uses_ocr_exception_state_without_button(self) -> None:
+        with TemporaryDirectory() as directory:
+            detector = ScreenDetector(
+                BotConfig(),
+                Path(directory),
+                ocr_reader=lambda image: ("Network error",),
+            )
+            detection = detector.detect(Image.new("RGB", (960, 443), "gray"))
+        self.assertEqual(ScreenState.NETWORK_ERROR, detection.state)
+        self.assertIsNone(detection.button)
+        self.assertIn("ocr_exception=network_error", detection.reason)
+
+    def test_unknown_screen_reuses_ocr_for_identical_frame(self) -> None:
+        ocr_reader = Mock(return_value=("This event has ended.",))
+        image = Image.new("RGB", (960, 443), "gray")
+        with TemporaryDirectory() as directory:
+            detector = ScreenDetector(
+                BotConfig(),
+                Path(directory),
+                ocr_reader=ocr_reader,
+            )
+            first = detector.detect(image)
+            second = detector.detect(image.copy())
+        self.assertEqual(ScreenState.EVENT_ENDED, first.state)
+        self.assertEqual(ScreenState.EVENT_ENDED, second.state)
+        ocr_reader.assert_called_once()
+
+    def test_exception_states_can_load_from_reference_templates(self) -> None:
+        expected = {
+            ScreenState.NETWORK_ERROR,
+            ScreenState.ENERGY_SHORTAGE,
+            ScreenState.INVENTORY_FULL,
+            ScreenState.MAINTENANCE,
+            ScreenState.EVENT_ENDED,
+        }
+        with TemporaryDirectory() as directory:
+            reference_dir = Path(directory)
+            for index, state in enumerate(expected):
+                Image.new("RGB", (64, 30), (index * 20, 40, 80)).save(
+                    reference_dir / f"{state.value}__01.jpg"
+                )
+            library = ReferenceLibrary(reference_dir)
+        self.assertEqual(
+            expected,
+            {reference.state for reference in library.references},
+        )
+
+    def test_exception_reference_is_a_non_action_state(self) -> None:
+        image = Image.new("RGB", (960, 443), (30, 60, 90))
+        ocr_reader = Mock(side_effect=AssertionError("OCR should not run"))
+        with TemporaryDirectory() as directory:
+            reference_path = Path(directory) / "maintenance__01.jpg"
+            image.save(reference_path)
+            detector = ScreenDetector(
+                BotConfig(),
+                Path(directory),
+                ocr_reader=ocr_reader,
+            )
+            with Image.open(reference_path) as source:
+                detection = detector.detect(source.convert("RGB"))
+        self.assertEqual(ScreenState.MAINTENANCE, detection.state)
+        self.assertEqual(1.0, detection.confidence)
+        self.assertIsNone(detection.button)
+        self.assertNotIn("button=missing", detection.reason)
+        ocr_reader.assert_not_called()
+
+    def test_known_screen_does_not_run_ocr(self) -> None:
+        ocr_reader = Mock(side_effect=AssertionError("OCR should not run"))
+        detector = ScreenDetector(BotConfig(), ocr_reader=ocr_reader)
+        with Image.open(FIXTURES / "stage_select.jpg") as image:
+            detection = detector.detect(image.convert("RGB"))
+        self.assertEqual(ScreenState.STAGE_SELECT, detection.state, detection.reason)
+        ocr_reader.assert_not_called()
 
 
 if __name__ == "__main__":

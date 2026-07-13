@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+from rtc_bot.exceptions import EXCEPTION_STATES
 from rtc_bot.model import ActionKind, Detection, PlannedAction, ScreenState
 
 
@@ -142,61 +143,72 @@ class RunSession:
                 self._result_recorded = True
                 new_result = detection.state
 
-        time_limit = self._time_limit_decision(detection.state)
-        if time_limit is not None:
-            decision = time_limit
-        elif (
-            self.policy.max_games is not None
-            and self.games_completed >= self.policy.max_games
+        if (
+            detection.state in EXCEPTION_STATES
+            and action.kind == ActionKind.PAUSE
         ):
             decision = self._pause(
                 detection.state,
-                f"maximum game count reached ({self.policy.max_games})",
+                action.reason,
                 should_stop=True,
-                exit_code=0,
-            )
-        elif self.policy.stop_after_win and new_result == ScreenState.WIN_RESULT:
-            decision = self._pause(
-                detection.state,
-                "stop after win",
-                should_stop=True,
-                exit_code=0,
-            )
-        elif (
-            new_result == ScreenState.LOSS_RESULT
-            and self.policy.on_loss == "exit"
-        ):
-            decision = self._pause(
-                detection.state,
-                "exit after loss",
-                should_stop=True,
-                exit_code=1,
-            )
-        elif (
-            new_result == ScreenState.LOSS_RESULT
-            and self.policy.on_loss == "pause"
-        ):
-            self._paused_reason = "paused after loss"
-            decision = self._pause(
-                detection.state,
-                self._paused_reason,
-                should_stop=False,
-                exit_code=None,
-            )
-        elif self._paused_reason is not None:
-            decision = self._pause(
-                detection.state,
-                self._paused_reason,
-                should_stop=False,
-                exit_code=None,
+                exit_code=3,
             )
         else:
-            decision = SessionDecision(
-                should_stop=False,
-                exit_code=None,
-                final_action=action,
-                reason=action.reason,
-            )
+            time_limit = self._time_limit_decision(detection.state)
+            if time_limit is not None:
+                decision = time_limit
+            elif (
+                self.policy.max_games is not None
+                and self.games_completed >= self.policy.max_games
+            ):
+                decision = self._pause(
+                    detection.state,
+                    f"maximum game count reached ({self.policy.max_games})",
+                    should_stop=True,
+                    exit_code=0,
+                )
+            elif self.policy.stop_after_win and new_result == ScreenState.WIN_RESULT:
+                decision = self._pause(
+                    detection.state,
+                    "stop after win",
+                    should_stop=True,
+                    exit_code=0,
+                )
+            elif (
+                new_result == ScreenState.LOSS_RESULT
+                and self.policy.on_loss == "exit"
+            ):
+                decision = self._pause(
+                    detection.state,
+                    "exit after loss",
+                    should_stop=True,
+                    exit_code=1,
+                )
+            elif (
+                new_result == ScreenState.LOSS_RESULT
+                and self.policy.on_loss == "pause"
+            ):
+                self._paused_reason = "paused after loss"
+                decision = self._pause(
+                    detection.state,
+                    self._paused_reason,
+                    should_stop=False,
+                    exit_code=None,
+                )
+            elif self._paused_reason is not None:
+                decision = self._pause(
+                    detection.state,
+                    self._paused_reason,
+                    should_stop=False,
+                    exit_code=None,
+                )
+            else:
+                decision = SessionDecision(
+                    should_stop=False,
+                    exit_code=None,
+                    final_action=action,
+                    reason=action.reason,
+                )
 
         self.action_counts[decision.final_action.kind] += 1
         if decision.final_action.kind == ActionKind.CLICK:

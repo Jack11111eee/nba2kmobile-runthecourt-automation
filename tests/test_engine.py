@@ -136,6 +136,22 @@ class DecisionEngineTests(unittest.TestCase):
         self.assertEqual(ActionKind.PAUSE, action.kind)
         self.assertEqual(ActionKind.PAUSE, again.kind)
 
+    def test_exception_states_pause_after_stable_detection(self) -> None:
+        for state in (
+            ScreenState.NETWORK_ERROR,
+            ScreenState.ENERGY_SHORTAGE,
+            ScreenState.INVENTORY_FULL,
+            ScreenState.MAINTENANCE,
+            ScreenState.EVENT_ENDED,
+        ):
+            with self.subTest(state=state):
+                engine = DecisionEngine(self.config)
+                first = engine.observe(detection(state, 0b0000), 0.0)
+                second = engine.observe(detection(state, 0b0000), 0.5)
+                self.assertEqual(ActionKind.WAIT, first.kind)
+                self.assertEqual(ActionKind.PAUSE, second.kind)
+                self.assertIsNone(second.point)
+
     def test_gameplay_and_unknown_never_click(self) -> None:
         for state in (
             ScreenState.GAMEPLAY,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from rtc_bot.config import BotConfig
+from rtc_bot.exceptions import EXCEPTION_STATES
 from rtc_bot.model import ActionKind, Detection, PlannedAction, ScreenState
 from rtc_bot.vision import signature_distance
 
@@ -20,7 +21,7 @@ CLICK_STATES = {
 
 PAUSE_STATES = {
     ScreenState.LOSS_RESULT,
-}
+} | EXCEPTION_STATES
 
 
 @dataclass
