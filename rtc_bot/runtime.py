@@ -10,18 +10,31 @@ from typing import Any
 
 from PIL import Image
 
+from rtc_bot.capture_store import CaptureStore
 from rtc_bot.config import BotConfig
 from rtc_bot.model import Detection, PlannedAction
+from rtc_bot.reporting import write_session_report
 
 
 class SessionLogger:
     def __init__(self, config: BotConfig) -> None:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         config.logs_dir.mkdir(parents=True, exist_ok=True)
-        config.captures_dir.mkdir(parents=True, exist_ok=True)
         self.config = config
         self.log_path = config.logs_dir / f"run-{stamp}.jsonl"
         self.last_unknown_snapshot_at = float("-inf")
+        self.capture_store = CaptureStore(
+            config.captures_dir,
+            max_bytes=config.capture_limit_bytes,
+        )
+
+    @property
+    def captures_written(self) -> int:
+        return self.capture_store.written_count
+
+    @property
+    def capture_bytes_written(self) -> int:
+        return self.capture_store.written_bytes
 
     def write(
         self,
@@ -43,9 +56,16 @@ class SessionLogger:
 
     def save_capture(self, image: Image.Image, label: str) -> Path:
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        path = self.config.captures_dir / f"{stamp}-{label}.png"
-        image.save(path)
-        return path
+        return self.capture_store.save(image, f"{stamp}-{label}")
+
+    def write_report(self, summary: dict[str, Any]) -> Path:
+        return write_session_report(
+            summary,
+            reports_dir=self.config.reports_dir,
+            log_path=self.log_path,
+            captures_written=self.captures_written,
+            capture_bytes_written=self.capture_bytes_written,
+        )
 
 
 def notify(title: str, message: str) -> None:

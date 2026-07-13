@@ -93,6 +93,21 @@ python -m rtc_bot run --dry-run --debug
 python -m rtc_bot run --debug
 ```
 
+建议给无人值守运行设置明确边界。例如最多完成 5 场、最多运行 30 分钟，并在失败
+后直接退出：
+
+```bash
+python -m rtc_bot run --max-games 5 --max-duration 30 --on-loss exit
+```
+
+可用的运行限制包括：
+
+- `--max-games N`：确认完成 N 场后停止，不继续点击结果页。
+- `--max-duration MINUTES`：到达时限后停止，镜像断开时间也计入。
+- `--stop-after-win`：确认胜利后停止，不进入奖励流程。
+- `--on-loss pause|exit`：失败后永久暂停，或保存报告并退出。
+- `--capture-limit-mb MB`：限制 `runtime/captures/` 总大小，默认 256 MB。
+
 也可以使用安装后的入口：
 
 ```bash
@@ -118,7 +133,8 @@ rtc-bot run --debug
 | 背面奖励卡 | 点击左下角显示全部 |
 | 翻卡动画 | 等待 |
 | 奖励汇总 | 点击右下角继续 |
-| 主菜单、网络异常、能量不足、未知页面 | 无限等待人工处理 |
+| 网络异常、能量不足、背包已满、维护、活动结束 | 本地 OCR 或模板确认后停止并通知 |
+| 主菜单、其他未知页面 | 无限等待人工处理 |
 
 ## 日志与隐私
 
@@ -127,6 +143,10 @@ rtc-bot run --debug
 - `runtime/logs/`：逐帧 JSONL 状态和动作日志
 - `runtime/captures/`：调试截图、暂停截图和点击前截图
 - `runtime/doctor/`：权限检查截图
+- `runtime/reports/`：每次结束时生成的 JSON 会话汇总
+
+截图目录默认限制为 256 MB。写入新截图后，工具会优先删除最旧的 PNG，并始终
+保留刚写入的最新截图。`--debug` 只在稳定状态变化时保存截图。
 
 这些文件可能包含游戏昵称、阵容、资源数量、通知内容和完整手机镜像画面。
 `runtime/` 已被 Git 忽略，不应上传、提交到 Issue，或直接发送给第三方。公开分享
@@ -158,9 +178,11 @@ python tools/replay_check.py /path/to/recording.mov
 rtc_bot/
   cli.py          命令行入口和运行循环
   engine.py       稳定帧、冷却、状态变化与动作决策
+  exceptions.py   本地 OCR 和已知异常消息分类
   macos.py        iPhone Mirroring 窗口抓取和鼠标事件
+  session.py      场次、时限、胜负和停止策略
   vision.py       本地模板、颜色和布局识别
-  runtime.py      JSONL 日志、截图、通知和防休眠
+  runtime.py      JSONL 日志、受限截图、报告、通知和防休眠
   assets/         运行时识别模板
 tests/            单元测试、流程测试和脱敏夹具
 tools/            离线回放与素材清理工具
@@ -170,8 +192,8 @@ tools/            离线回放与素材清理工具
 
 - 识别器针对当前已采集的中文 UI，其他语言和分辨率未验证。
 - 游戏更新、活动换皮、窗口比例变化或系统升级可能降低识别准确率。
-- 网络错误、能量不足、背包上限、维护和活动结束页面尚未全部获得专用素材，默认
-  等待人工处理。
+- 网络错误、能量不足、背包上限、维护和活动结束页面尚未全部获得专用素材；
+  当前通过本地文字识别和中英文关键词补充检测，未匹配的页面仍等待人工处理。
 - iPhone Mirroring 窗口消失、最小化、黑帧或位置在识别后变化时会取消点击。
 - 工具不会从 NBA 2K 主菜单自动寻找并重新进入活动。
 

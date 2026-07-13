@@ -104,6 +104,21 @@ correct, enable real clicks:
 python -m rtc_bot run --debug
 ```
 
+Bound unattended runs explicitly. This example stops after five completed
+games or 30 minutes and exits after a loss:
+
+```bash
+python -m rtc_bot run --max-games 5 --max-duration 30 --on-loss exit
+```
+
+Available limits:
+
+- `--max-games N`: stop after N confirmed game results without continuing.
+- `--max-duration MINUTES`: include mirror outages in the time limit.
+- `--stop-after-win`: stop on a confirmed win before the reward flow.
+- `--on-loss pause|exit`: pause indefinitely or write a report and exit.
+- `--capture-limit-mb MB`: cap `runtime/captures/`; the default is 256 MB.
+
 The installed entry point provides the same commands:
 
 ```bash
@@ -130,7 +145,8 @@ prevent the Mac from sleeping.
 | Face-down reward cards | Click Show All in the lower-left corner |
 | Card-flip animation | Wait |
 | Reward summary | Click Continue in the lower-right corner |
-| Main menu, network error, insufficient energy, unknown screen | Wait indefinitely for manual intervention |
+| Network error, insufficient energy, full inventory, maintenance, ended event | Stop and notify after local OCR or template confirmation |
+| Main menu and other unknown screens | Wait indefinitely for manual intervention |
 
 ## Logs and Privacy
 
@@ -139,6 +155,11 @@ Runtime data is stored under `runtime/`:
 - `runtime/logs/`: per-frame JSONL state and action logs
 - `runtime/captures/`: debug, pause, and pre-click screenshots
 - `runtime/doctor/`: diagnostic screenshots
+- `runtime/reports/`: JSON session summaries written when a run ends
+
+The capture directory is capped at 256 MB by default. After writing a new
+capture, the tool removes the oldest PNGs first and always keeps the newest
+file. `--debug` saves only stable state changes.
 
 These files may contain player names, lineups, resource counts, notification
 text, and complete phone mirror frames. The repository ignores `runtime/`.
@@ -173,9 +194,11 @@ video and extracts frames into a temporary directory.
 rtc_bot/
   cli.py          Command-line interface and runtime loop
   engine.py       Stable-frame, cooldown, state-change, and action decisions
+  exceptions.py   Local OCR and known exception-message classification
   macos.py        iPhone Mirroring capture and mouse events
+  session.py      Game, duration, outcome, and stop policies
   vision.py       Local template, color, and layout recognition
-  runtime.py      JSONL logs, screenshots, notifications, and sleep prevention
+  runtime.py      JSONL logs, bounded captures, reports, notifications, and sleep prevention
   assets/         Runtime recognition templates
 tests/            Unit tests, flow tests, and redacted fixtures
 tools/            Offline replay and asset-sanitization tools
@@ -189,7 +212,8 @@ tools/            Offline replay and asset-sanitization tools
   may reduce recognition accuracy.
 - Dedicated samples are not yet available for every network error,
   insufficient-energy, inventory-limit, maintenance, and event-ended screen.
-  The default behavior is to wait for manual intervention.
+  Local text recognition and English/Chinese keywords supplement detection;
+  unmatched screens still wait for manual intervention.
 - A click is canceled if the iPhone Mirroring window disappears, is minimized,
   produces a black frame, or moves after recognition.
 - The tool does not navigate from the NBA 2K main menu back into the event.

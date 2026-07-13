@@ -17,6 +17,7 @@ class BotConfig:
     state_distance_threshold: float = 0.24
     minimum_action_confidence: float = 0.45
     pack_fallback_minimum_confidence: float = 0.60
+    capture_limit_bytes: int = 256 * 1024 * 1024
     mirror_bundle_id: str = "com.apple.ScreenContinuity"
     mirror_owner_name: str = "iPhone Mirroring"
     runtime_dir: Path = Path("runtime")
@@ -32,3 +33,7 @@ class BotConfig:
     @property
     def doctor_dir(self) -> Path:
         return self.runtime_dir / "doctor"
+
+    @property
+    def reports_dir(self) -> Path:
+        return self.runtime_dir / "reports"
