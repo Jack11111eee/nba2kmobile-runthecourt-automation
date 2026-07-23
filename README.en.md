@@ -11,7 +11,8 @@ game data.
 
 > Current status: Alpha. The tool has been validated on an iPhone 15 Pro
 > running iOS 18.6.2, with the game in its Chinese landscape UI through macOS
-> iPhone Mirroring. Run a new dry run after any game or UI update.
+> iPhone Mirroring. A single-game live-click test on July 23, 2026 completed
+> without observed click issues. Run a new dry run after any game or UI update.
 
 ## Safety Model
 
@@ -178,6 +179,15 @@ python -m unittest discover -s tests -v
 python -m compileall -q rtc_bot tests tools
 python -m pip check
 ```
+
+The latest live validation ran on July 23, 2026 in `live` mode with a 15-minute
+limit. Its session report recorded 1,797 frames and eight allowlisted clicks,
+then stopped normally after 902.4 seconds because the 900-second limit was
+reached. The run produced a JSON session summary and 109 captures, while
+`runtime/captures/` remained within its configured 256 MB cap. The report
+recorded zero wins and zero losses, so this validates real clicks, bounded
+stopping, session reports, and capture retention, but not result-screen or
+exception-OCR handling.
 
 Replay a recording offline:
 

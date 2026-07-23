@@ -9,8 +9,8 @@
 项目不会调用云端视觉模型，也不会上传截图、日志或游戏数据。
 
 > 当前状态：Alpha。已在 iPhone 15 Pro、iOS 18.6.2、中文横屏界面和
-> macOS iPhone Mirroring 环境下完成实机验证。游戏更新或 UI 变化后必须重新
-> 执行 dry-run 验证。
+> macOS iPhone Mirroring 环境下完成实机验证。2026-07-23 的单场真实点击测试
+> 未观察到点击异常。游戏更新或 UI 变化后必须重新执行 dry-run 验证。
 
 ## 安全设计
 
@@ -163,6 +163,12 @@ python -m unittest discover -s tests -v
 python -m compileall -q rtc_bot tests tools
 python -m pip check
 ```
+
+最近一次实机验证于 2026-07-23 使用 `live` 模式和 15 分钟上限完成。会话报告
+记录了 1,797 帧和 8 次白名单点击，并在 902.4 秒后因 900 秒时限正常停止。
+运行生成了 JSON 会话汇总和 109 张截图；`runtime/captures/` 最终保持在配置的
+256 MB 上限内。该次报告的胜负计数均为 0，因此这条记录验证了真实点击、时限
+停止、会话报告和截图保留，但不视为结果页或异常 OCR 流程验证。
 
 使用录屏进行离线回放：
 
