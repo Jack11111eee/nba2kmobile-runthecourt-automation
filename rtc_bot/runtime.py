@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from contextlib import AbstractContextManager
 from dataclasses import asdict
 from datetime import datetime
@@ -69,6 +70,16 @@ class SessionLogger:
 
 
 def notify(title: str, message: str) -> None:
+    if sys.platform == "win32":
+        try:
+            import winsound
+
+            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except (ImportError, RuntimeError):
+            pass
+        return
+    if sys.platform != "darwin":
+        return
     escaped_title = title.replace('"', '\\"')
     escaped_message = message.replace('"', '\\"')
     script = f'display notification "{escaped_message}" with title "{escaped_title}"'
@@ -83,16 +94,33 @@ def notify(title: str, message: str) -> None:
 class SleepInhibitor(AbstractContextManager["SleepInhibitor"]):
     def __init__(self) -> None:
         self.process: subprocess.Popen[bytes] | None = None
+        self.windows_active = False
 
     def __enter__(self) -> "SleepInhibitor":
-        self.process = subprocess.Popen(
-            ["/usr/bin/caffeinate", "-dimsu"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        if sys.platform == "win32":
+            import ctypes
+
+            continuous = 0x80000000
+            system_required = 0x00000001
+            display_required = 0x00000002
+            result = ctypes.windll.kernel32.SetThreadExecutionState(
+                continuous | system_required | display_required
+            )
+            self.windows_active = bool(result)
+        elif sys.platform == "darwin":
+            self.process = subprocess.Popen(
+                ["/usr/bin/caffeinate", "-dimsu"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         return self
 
     def __exit__(self, *args: object) -> None:
+        if self.windows_active:
+            import ctypes
+
+            ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)
+            self.windows_active = False
         if self.process is not None:
             self.process.terminate()
             try:

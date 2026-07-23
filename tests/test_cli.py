@@ -7,11 +7,11 @@ from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from datetime import datetime, timezone
 from io import StringIO
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image
 
+from rtc_bot.bridge import BridgeStartResult, CaptureResult
 from rtc_bot.cli import build_parser, run_loop, session_summary
 from rtc_bot.config import BotConfig
 from rtc_bot.model import ActionKind, Detection, PlannedAction, ScreenState
@@ -21,24 +21,33 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class FakeBridge:
-    available = True
-
     def __init__(self, image: Image.Image) -> None:
         self.image = image
         self.click_count = 0
+        self.closed = False
+        self.last_error = ""
 
-    def permissions(self, *, request: bool) -> SimpleNamespace:
-        return SimpleNamespace(screen_capture=True, event_posting=True)
+    def start(
+        self, *, request_permissions: bool, require_control: bool
+    ) -> BridgeStartResult:
+        return BridgeStartResult(True, ("device ready",))
 
-    def find_mirror_window(self) -> object:
-        return object()
-
-    def capture(self, window: object) -> SimpleNamespace:
-        return SimpleNamespace(image=self.image, backend="test")
+    def capture(self) -> CaptureResult:
+        return CaptureResult(
+            image=self.image,
+            backend="test",
+            source_id="test-device",
+        )
 
     def click(self, *args: object) -> bool:
         self.click_count += 1
         return True
+
+    def wait(self, seconds: float) -> None:
+        return None
+
+    def close(self) -> None:
+        self.closed = True
 
 
 class CLITests(unittest.TestCase):
@@ -55,6 +64,10 @@ class CLITests(unittest.TestCase):
                 "exit",
                 "--capture-limit-mb",
                 "128",
+                "--backend",
+                "ios-usb",
+                "--udid",
+                "test-device",
             ]
         )
 
@@ -63,6 +76,8 @@ class CLITests(unittest.TestCase):
         self.assertTrue(args.stop_after_win)
         self.assertEqual("exit", args.on_loss)
         self.assertEqual(128.0, args.capture_limit_mb)
+        self.assertEqual("ios-usb", args.backend)
+        self.assertEqual("test-device", args.udid)
 
     def test_run_parser_uses_safe_defaults_and_rejects_zero_limits(self) -> None:
         args = build_parser().parse_args(["run"])
@@ -125,7 +140,10 @@ class CLITests(unittest.TestCase):
                 capture_limit_bytes=1024 * 1024,
             )
             with (
-                patch("rtc_bot.cli.MacOSBridge", return_value=bridge),
+                patch(
+                    "rtc_bot.cli.create_bridge",
+                    return_value=bridge,
+                ) as bridge_factory,
                 patch("rtc_bot.cli.SleepInhibitor", return_value=nullcontext()),
                 patch("rtc_bot.cli.notify"),
                 redirect_stdout(StringIO()),
@@ -135,14 +153,23 @@ class CLITests(unittest.TestCase):
                     dry_run=False,
                     debug=False,
                     policy=RunPolicy(max_games=1),
+                    backend="ios-usb",
+                    udid="test-device",
                 )
 
             self.assertEqual(0, exit_code)
             self.assertEqual(0, bridge.click_count)
+            self.assertTrue(bridge.closed)
+            bridge_factory.assert_called_once_with(
+                config,
+                backend="ios-usb",
+                udid="test-device",
+            )
             report_path = next(config.reports_dir.glob("*.json"))
             report = json.loads(report_path.read_text(encoding="utf-8"))
             self.assertEqual(1, report["wins"])
             self.assertEqual(0, report["losses"])
+            self.assertEqual(1, report["action_counts"]["pause"])
             self.assertIn("maximum game count reached", report["stop_reason"])
 
 

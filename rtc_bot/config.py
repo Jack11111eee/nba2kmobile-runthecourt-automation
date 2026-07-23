@@ -7,6 +7,7 @@ from pathlib import Path
 @dataclass(frozen=True)
 class BotConfig:
     capture_interval_seconds: float = 0.5
+    device_operation_timeout_seconds: float = 10.0
     stable_frames: int = 2
     post_click_cooldown_seconds: float = 1.5
     reward_auto_wait_seconds: float = 5.0

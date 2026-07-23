@@ -8,9 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from rtc_bot.bridge import BACKEND_CHOICES, create_bridge, is_nonblank
 from rtc_bot.config import BotConfig
 from rtc_bot.engine import DecisionEngine
-from rtc_bot.macos import MacOSBridge, is_nonblank
 from rtc_bot.model import ActionKind, ScreenState
 from rtc_bot.reporting import format_console_summary
 from rtc_bot.runtime import SessionLogger, SleepInhibitor, notify
@@ -38,8 +38,21 @@ def build_parser() -> argparse.ArgumentParser:
         description="NBA 2K Mobile Run The Court local automation",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
-    subparsers.add_parser("doctor", help="check permissions and mirror capture")
+    doctor_parser = subparsers.add_parser(
+        "doctor", help="check permissions and device capture"
+    )
     run_parser = subparsers.add_parser("run", help="start automation")
+    for command_parser in (doctor_parser, run_parser):
+        command_parser.add_argument(
+            "--backend",
+            choices=BACKEND_CHOICES,
+            default="auto",
+            help="capture/control backend (default: platform-specific auto)",
+        )
+        command_parser.add_argument(
+            "--udid",
+            help="target iPhone UDID for the ios-usb backend",
+        )
     run_parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -80,58 +93,46 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def print_permissions(screen_capture: bool, event_posting: bool) -> None:
-    print(f"screen capture permission: {'OK' if screen_capture else 'MISSING'}")
-    print(f"accessibility/event permission: {'OK' if event_posting else 'MISSING'}")
-
-
-def run_doctor(config: BotConfig) -> int:
-    bridge = MacOSBridge(config)
-    if not bridge.available:
-        print("PyObjC is not installed. Install the project dependencies first.")
+def run_doctor(
+    config: BotConfig,
+    *,
+    backend: str = "auto",
+    udid: str | None = None,
+) -> int:
+    try:
+        bridge = create_bridge(config, backend=backend, udid=udid)
+    except ValueError as exc:
+        print(exc)
         return 2
 
-    permissions = bridge.permissions(request=True)
-    print_permissions(permissions.screen_capture, permissions.event_posting)
-    if not permissions.screen_capture or not permissions.event_posting:
+    try:
+        start = bridge.start(request_permissions=True, require_control=True)
+        for message in start.messages:
+            print(message)
+        if not start.ready:
+            return 2
+
+        capture = bridge.capture()
+        if capture is None or not is_nonblank(capture.image):
+            print(f"device capture: FAILED ({bridge.last_error})")
+            return 2
+
+        config.doctor_dir.mkdir(parents=True, exist_ok=True)
+        path = config.doctor_dir / "device-capture.png"
+        capture.image.save(path)
+        detector = ScreenDetector(config)
+        detection = detector.detect(capture.image)
         print(
-            "Permissions were requested. Enable Screen Recording and "
-            "Accessibility for the terminal application running the bot, "
-            "then re-run doctor."
+            f"device capture: OK ({capture.backend}, "
+            f"{capture.image.width}x{capture.image.height})"
         )
-        return 2
-
-    window = bridge.find_mirror_window()
-    if window is None:
-        print("iPhone Mirroring window: NOT FOUND")
-        print("Open iPhone Mirroring, connect the phone, and keep the window visible.")
-        return 2
-
-    print(
-        "iPhone Mirroring window: "
-        f"id={window.window_id} "
-        f"bounds={window.bounds.width:.0f}x{window.bounds.height:.0f}"
-        f"+{window.bounds.x:.0f}+{window.bounds.y:.0f}"
-    )
-    capture = bridge.capture(window)
-    if capture is None or not is_nonblank(capture.image):
-        print("mirror capture: FAILED or BLACK")
-        return 2
-
-    config.doctor_dir.mkdir(parents=True, exist_ok=True)
-    path = config.doctor_dir / "mirror-capture.png"
-    capture.image.save(path)
-    detector = ScreenDetector(config)
-    detection = detector.detect(capture.image)
-    print(
-        f"mirror capture: OK ({capture.backend}, "
-        f"{capture.image.width}x{capture.image.height})"
-    )
-    print(
-        f"detected state: {detection.state.value} "
-        f"confidence={detection.confidence:.2f}"
-    )
-    print(f"saved capture: {path.resolve()}")
+        print(
+            f"detected state: {detection.state.value} "
+            f"confidence={detection.confidence:.2f}"
+        )
+        print(f"saved capture: {path.resolve()}")
+    finally:
+        bridge.close()
 
     return 0
 
@@ -172,150 +173,168 @@ def run_loop(
     dry_run: bool,
     debug: bool,
     policy: RunPolicy,
+    backend: str = "auto",
+    udid: str | None = None,
 ) -> int:
-    bridge = MacOSBridge(config)
-    if not bridge.available:
-        print("PyObjC is not installed. Install the project dependencies first.")
+    try:
+        bridge = create_bridge(config, backend=backend, udid=udid)
+    except ValueError as exc:
+        print(exc)
         return 2
 
-    permissions = bridge.permissions(request=False)
-    if not permissions.screen_capture or (not dry_run and not permissions.event_posting):
-        print_permissions(permissions.screen_capture, permissions.event_posting)
-        print("Run `python3 -m rtc_bot doctor` and grant the requested permissions.")
-        return 2
+    try:
+        start = bridge.start(
+            request_permissions=False,
+            require_control=not dry_run,
+        )
+        for message in start.messages:
+            print(message)
+        if not start.ready:
+            print("Run `python -m rtc_bot doctor` after fixing the reported issue.")
+            return 2
 
-    detector = ScreenDetector(config)
-    engine = DecisionEngine(config)
-    session = RunSession(policy)
-    logger = SessionLogger(config)
-    last_console_key: tuple[object, ...] | None = None
-    last_debug_state: ScreenState | None = None
-    last_pack_debug_snapshot_at = float("-inf")
-    pause_notified = False
-    next_tick = time.monotonic()
-    started_at = datetime.now().astimezone()
-    stop_reason = "user interrupt"
-    exit_code = 0
+        detector = ScreenDetector(config)
+        engine = DecisionEngine(config)
+        session = RunSession(policy)
+        logger = SessionLogger(config)
+        last_console_key: tuple[object, ...] | None = None
+        last_debug_state: ScreenState | None = None
+        last_pack_debug_snapshot_at = float("-inf")
+        pause_notified = False
+        next_tick = time.monotonic()
+        started_at = datetime.now().astimezone()
+        stop_reason = "user interrupt"
+        exit_code = 0
 
-    mode = "dry-run" if dry_run else "live"
-    print(f"rtc-bot started in {mode.upper()} mode; press Ctrl+C to stop")
+        mode = "dry-run" if dry_run else "live"
+        print(f"rtc-bot started in {mode.upper()} mode; press Ctrl+C to stop")
 
-    with SleepInhibitor():
-        try:
-            while True:
-                time_decision = session.check_time_limit()
-                if time_decision is not None:
-                    stop_reason = time_decision.reason
-                    exit_code = time_decision.exit_code or 0
-                    notify("RTC Bot stopped", stop_reason)
-                    print(f"automation stopped; reason={stop_reason}")
-                    break
+        with SleepInhibitor():
+            try:
+                while True:
+                    time_decision = session.check_time_limit()
+                    if time_decision is not None:
+                        stop_reason = time_decision.reason
+                        exit_code = time_decision.exit_code or 0
+                        notify("RTC Bot stopped", stop_reason)
+                        print(f"automation stopped; reason={stop_reason}")
+                        break
 
-                now = time.monotonic()
-                window = bridge.find_mirror_window()
-                if window is None:
-                    key = ("window-missing",)
-                    if key != last_console_key:
-                        print("[wait] iPhone Mirroring window is unavailable")
-                        notify("RTC Bot waiting", "iPhone Mirroring window is unavailable")
-                        last_console_key = key
-                    next_tick = time.monotonic()
-                    time.sleep(config.capture_interval_seconds)
-                    continue
+                    now = time.monotonic()
+                    capture = bridge.capture()
+                    if capture is None:
+                        reason = bridge.last_error or "device capture failed"
+                        key = ("capture-failed", reason)
+                        if key != last_console_key:
+                            print(f"[wait] {reason}")
+                            notify("RTC Bot waiting", reason)
+                            last_console_key = key
+                        next_tick = time.monotonic()
+                        bridge.wait(config.capture_interval_seconds)
+                        continue
 
-                capture = bridge.capture(window)
-                if capture is None:
-                    key = ("capture-failed",)
-                    if key != last_console_key:
-                        print("[wait] mirror capture failed or returned a black frame")
-                        notify("RTC Bot waiting", "Mirror capture failed or returned black")
-                        last_console_key = key
-                    next_tick = time.monotonic()
-                    time.sleep(config.capture_interval_seconds)
-                    continue
-
-                detection = detector.detect(capture.image)
-                engine_action = engine.observe(detection, now)
-                session_decision = session.observe(detection, engine_action)
-                action = session_decision.final_action
-                logger.write(
-                    timestamp=time.time(),
-                    detection=detection,
-                    action=action,
-                    extra={"capture_backend": capture.backend, "dry_run": dry_run},
-                )
-
-                console_key = (
-                    detection.state,
-                    round(detection.confidence, 2),
-                    action.kind,
-                    action.reason,
-                )
-                if console_key != last_console_key:
-                    print(
-                        f"[{action.kind.value}] state={detection.state.value} "
-                        f"confidence={detection.confidence:.2f} "
-                        f"reason={action.reason}"
+                    detection = detector.detect(capture.image)
+                    engine_action = engine.observe(detection, now)
+                    session_decision = session.observe(detection, engine_action)
+                    action = session_decision.final_action
+                    logger.write(
+                        timestamp=time.time(),
+                        detection=detection,
+                        action=action,
+                        extra={
+                            "capture_backend": capture.backend,
+                            "dry_run": dry_run,
+                        },
                     )
-                    last_console_key = console_key
 
-                stable_state = engine.status.stable_state
-                if (
-                    debug
-                    and engine.status.stable_count >= config.stable_frames
-                    and stable_state != last_debug_state
-                ):
-                    logger.save_capture(capture.image, stable_state.value)
-                    last_debug_state = stable_state
-                    if stable_state == ScreenState.UNKNOWN:
-                        logger.last_unknown_snapshot_at = now
+                    console_key = (
+                        detection.state,
+                        round(detection.confidence, 2),
+                        action.kind,
+                        action.reason,
+                    )
+                    if console_key != last_console_key:
+                        print(
+                            f"[{action.kind.value}] "
+                            f"state={detection.state.value} "
+                            f"confidence={detection.confidence:.2f} "
+                            f"reason={action.reason}"
+                        )
+                        last_console_key = console_key
 
-                if (
-                    debug
-                    and detection.state == ScreenState.PACK_FLIP_ANIMATION
-                    and now - last_pack_debug_snapshot_at
-                    >= config.pack_debug_snapshot_interval_seconds
-                ):
-                    logger.save_capture(capture.image, "pack-flip-wait")
-                    last_pack_debug_snapshot_at = now
-
-                if detection.state == ScreenState.UNKNOWN:
+                    stable_state = engine.status.stable_state
                     if (
-                        now - logger.last_unknown_snapshot_at
-                        >= config.unknown_snapshot_interval_seconds
+                        debug
+                        and engine.status.stable_count >= config.stable_frames
+                        and stable_state != last_debug_state
                     ):
-                        logger.save_capture(capture.image, "unknown")
-                        logger.last_unknown_snapshot_at = now
+                        logger.save_capture(capture.image, stable_state.value)
+                        last_debug_state = stable_state
+                        if stable_state == ScreenState.UNKNOWN:
+                            logger.last_unknown_snapshot_at = now
 
-                if action.kind == ActionKind.PAUSE and not pause_notified:
-                    path = logger.save_capture(capture.image, "paused")
-                    notify("RTC Bot paused", action.reason)
-                    print(f"automation paused; capture saved to {path.resolve()}")
-                    pause_notified = True
+                    if (
+                        debug
+                        and detection.state == ScreenState.PACK_FLIP_ANIMATION
+                        and now - last_pack_debug_snapshot_at
+                        >= config.pack_debug_snapshot_interval_seconds
+                    ):
+                        logger.save_capture(capture.image, "pack-flip-wait")
+                        last_pack_debug_snapshot_at = now
 
-                if session_decision.should_stop:
-                    stop_reason = session_decision.reason
-                    exit_code = session_decision.exit_code or 0
-                    break
+                    if detection.state == ScreenState.UNKNOWN:
+                        if (
+                            now - logger.last_unknown_snapshot_at
+                            >= config.unknown_snapshot_interval_seconds
+                        ):
+                            logger.save_capture(capture.image, "unknown")
+                            logger.last_unknown_snapshot_at = now
 
-                if action.kind == ActionKind.CLICK:
-                    logger.save_capture(
-                        capture.image, f"planned-click-{detection.state.value}"
-                    )
-                    if dry_run:
-                        print(f"[dry-run] would click normalized point {action.point}")
-                    else:
-                        assert action.point is not None
-                        _, content_rect = crop_content(capture.image)
-                        if not bridge.click(capture, content_rect, action.point):
-                            logger.save_capture(capture.image, "click-cancelled")
-                            print("[wait] click cancelled because the window changed")
+                    if action.kind == ActionKind.PAUSE and not pause_notified:
+                        path = logger.save_capture(capture.image, "paused")
+                        notify("RTC Bot paused", action.reason)
+                        print(
+                            f"automation paused; capture saved to {path.resolve()}"
+                        )
+                        pause_notified = True
 
-                next_tick += config.capture_interval_seconds
-                time.sleep(max(0.0, next_tick - time.monotonic()))
-        except KeyboardInterrupt:
-            print("\nrtc-bot stopped by user")
-            stop_reason = "user interrupt"
+                    if session_decision.should_stop:
+                        stop_reason = session_decision.reason
+                        exit_code = session_decision.exit_code or 0
+                        break
+
+                    if action.kind == ActionKind.CLICK:
+                        logger.save_capture(
+                            capture.image,
+                            f"planned-click-{detection.state.value}",
+                        )
+                        if dry_run:
+                            print(
+                                "[dry-run] would click normalized point "
+                                f"{action.point}"
+                            )
+                        else:
+                            assert action.point is not None
+                            _, content_rect = crop_content(capture.image)
+                            if not bridge.click(
+                                capture, content_rect, action.point
+                            ):
+                                logger.save_capture(
+                                    capture.image, "click-cancelled"
+                                )
+                                print(
+                                    "[wait] click cancelled because the "
+                                    "capture source changed or rejected "
+                                    "the touch"
+                                )
+
+                    next_tick += config.capture_interval_seconds
+                    bridge.wait(max(0.0, next_tick - time.monotonic()))
+            except KeyboardInterrupt:
+                print("\nrtc-bot stopped by user")
+                stop_reason = "user interrupt"
+    finally:
+        bridge.close()
 
     ended_at = datetime.now().astimezone()
     summary = session_summary(
@@ -343,7 +362,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command == "doctor":
         config = BotConfig(runtime_dir=Path.cwd() / "runtime")
-        return run_doctor(config)
+        return run_doctor(config, backend=args.backend, udid=args.udid)
     if args.command == "run":
         config = BotConfig(
             runtime_dir=Path.cwd() / "runtime",
@@ -362,6 +381,8 @@ def main(argv: list[str] | None = None) -> int:
             dry_run=args.dry_run,
             debug=args.debug,
             policy=policy,
+            backend=args.backend,
+            udid=args.udid,
         )
     return 2
 
