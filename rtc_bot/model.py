@@ -18,6 +18,11 @@ class ScreenState(StrEnum):
     PACK_REVEAL = "pack_reveal"
     PACK_FLIP_ANIMATION = "pack_flip_animation"
     PACK_SUMMARY = "pack_summary"
+    NETWORK_ERROR = "network_error"
+    ENERGY_SHORTAGE = "energy_shortage"
+    INVENTORY_FULL = "inventory_full"
+    MAINTENANCE = "maintenance"
+    EVENT_ENDED = "event_ended"
     UNKNOWN = "unknown"
 
 

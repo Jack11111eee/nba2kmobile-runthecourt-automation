@@ -10,8 +10,9 @@
 项目不会调用云端视觉模型，也不会上传截图、日志或游戏数据。
 
 > 当前状态：Alpha。已在 iPhone 15 Pro、iOS 18.6.2、中文横屏界面和
-> macOS iPhone Mirroring 环境下完成实机验证。游戏更新或 UI 变化后必须重新
-> 执行 dry-run 验证。Windows 后端已通过自动化测试，但尚未完成真实
+> macOS iPhone Mirroring 环境下完成实机验证。2026-07-23 的单场真实点击测试
+> 未观察到点击异常。游戏更新或 UI 变化后必须重新执行 dry-run 验证。
+> Windows 后端已通过自动化测试，但尚未完成真实
 > Windows+iPhone USB 实机验收。
 
 ## 安全设计
@@ -138,6 +139,21 @@ python -m rtc_bot run --dry-run --debug
 python -m rtc_bot run --debug
 ```
 
+建议给无人值守运行设置明确边界。例如最多完成 5 场、最多运行 30 分钟，并在失败
+后直接退出：
+
+```bash
+python -m rtc_bot run --max-games 5 --max-duration 30 --on-loss exit
+```
+
+可用的运行限制包括：
+
+- `--max-games N`：确认完成 N 场后停止，不继续点击结果页。
+- `--max-duration MINUTES`：到达时限后停止，截图或设备连接中断时间也计入。
+- `--stop-after-win`：确认胜利后停止，不进入奖励流程。
+- `--on-loss pause|exit`：失败后永久暂停，或保存报告并退出。
+- `--capture-limit-mb MB`：限制 `runtime/captures/` 总大小，默认 256 MB。
+
 在 Mac 上也可以测试与 Windows 相同的直接 USB 通道：
 
 ```bash
@@ -172,7 +188,8 @@ rtc-bot run --debug
 | 背面奖励卡 | 点击左下角显示全部 |
 | 翻卡动画 | 等待 |
 | 奖励汇总 | 点击右下角继续 |
-| 主菜单、网络异常、能量不足、未知页面 | 无限等待人工处理 |
+| 网络异常、能量不足、背包已满、维护、活动结束 | 专用模板或 macOS 本地 OCR 确认后停止并通知 |
+| 主菜单、其他未知页面 | 无限等待人工处理 |
 
 ## 日志与隐私
 
@@ -181,6 +198,10 @@ rtc-bot run --debug
 - `runtime/logs/`：逐帧 JSONL 状态和动作日志
 - `runtime/captures/`：调试截图、暂停截图和点击前截图
 - `runtime/doctor/`：权限检查截图
+- `runtime/reports/`：每次结束时生成的 JSON 会话汇总
+
+截图目录默认限制为 256 MB。写入新截图后，工具会优先删除最旧的 PNG，并始终
+保留刚写入的最新截图。`--debug` 只在稳定状态变化时保存截图。
 
 这些文件可能包含游戏昵称、阵容、资源数量、通知内容和完整手机镜像画面。
 `runtime/` 已被 Git 忽略，不应上传、提交到 Issue，或直接发送给第三方。公开分享
@@ -198,6 +219,12 @@ python -m compileall -q rtc_bot tests tools
 python -m pip check
 ```
 
+最近一次实机验证于 2026-07-23 使用 `live` 模式和 15 分钟上限完成。会话报告
+记录了 1,797 帧和 8 次白名单点击，并在 902.4 秒后因 900 秒时限正常停止。
+运行生成了 JSON 会话汇总和 109 张截图；`runtime/captures/` 最终保持在配置的
+256 MB 上限内。该次报告的胜负计数均为 0，因此这条记录验证了真实点击、时限
+停止、会话报告和截图保留，但不视为结果页或异常 OCR 流程验证。
+
 使用录屏进行离线回放：
 
 ```bash
@@ -213,10 +240,12 @@ rtc_bot/
   bridge.py       跨平台后端接口和选择
   cli.py          命令行入口和运行循环
   engine.py       稳定帧、冷却、状态变化与动作决策
+  exceptions.py   本地 OCR 和已知异常消息分类
   ios_device.py   iPhone USB 截图和触摸事件
   macos.py        iPhone Mirroring 窗口抓取和鼠标事件
+  session.py      场次、时限、胜负和停止策略
   vision.py       本地模板、颜色和布局识别
-  runtime.py      JSONL 日志、截图、通知和防休眠
+  runtime.py      JSONL 日志、受限截图、报告、通知和防休眠
   assets/         运行时识别模板
 tests/            单元测试、流程测试和脱敏夹具
 tools/            离线回放与素材清理工具
@@ -226,9 +255,11 @@ tools/            离线回放与素材清理工具
 
 - 识别器针对当前已采集的中文 UI，其他语言和分辨率未验证。
 - 游戏更新、活动换皮、窗口比例变化或系统升级可能降低识别准确率。
-- 网络错误、能量不足、背包上限、维护和活动结束页面尚未全部获得专用素材，默认
-  等待人工处理。
-- iPhone Mirroring 窗口消失、最小化、黑帧或位置在识别后变化时会取消点击。
+- 网络错误、能量不足、背包上限、维护和活动结束页面尚未全部获得专用素材；
+  macOS 当前通过本地文字识别和中英文关键词补充检测；Windows USB 后端在没有
+  专用模板匹配时仍等待人工处理。
+- iPhone Mirroring 窗口消失、最小化、黑帧或位置在识别后变化时会取消点击；
+  USB 后端在设备身份或截图尺寸发生变化时也会取消触摸。
 - Windows USB 后端尚未在真实 Windows+iPhone 环境完成验收；CI 只能验证安装、
   导入和模拟设备流程。
 - USB 后端需要 iOS Developer Mode 和已挂载的 Developer Disk Image；手机重启

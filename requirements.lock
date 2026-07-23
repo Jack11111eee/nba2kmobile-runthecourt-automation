@@ -4,8 +4,10 @@ pillow==12.1.1
 pyobjc-core==12.2.1
 pyobjc-framework-ApplicationServices==12.2.1
 pyobjc-framework-Cocoa==12.2.1
+pyobjc-framework-CoreML==12.2.1
 pyobjc-framework-CoreText==12.2.1
 pyobjc-framework-Quartz==12.2.1
+pyobjc-framework-Vision==12.2.1
 scipy==1.17.1
 setuptools==83.0.0
 wheel==0.47.0

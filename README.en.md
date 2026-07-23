@@ -12,8 +12,9 @@ game data.
 
 > Current status: Alpha. The tool has been validated on an iPhone 15 Pro
 > running iOS 18.6.2, with the game in its Chinese landscape UI through macOS
-> iPhone Mirroring. Run a new dry run after any game or UI update. The Windows
-> backend has automated coverage but has not completed a real
+> iPhone Mirroring. A single-game live-click test on July 23, 2026 completed
+> without observed click issues. Run a new dry run after any game or UI update.
+> The Windows backend has automated coverage but has not completed a real
 > Windows+iPhone USB acceptance test.
 
 ## Safety Model
@@ -150,6 +151,21 @@ correct, enable real clicks:
 python -m rtc_bot run --debug
 ```
 
+Bound unattended runs explicitly. This example stops after five completed
+games or 30 minutes and exits after a loss:
+
+```bash
+python -m rtc_bot run --max-games 5 --max-duration 30 --on-loss exit
+```
+
+Available limits:
+
+- `--max-games N`: stop after N confirmed game results without continuing.
+- `--max-duration MINUTES`: include capture or device outages in the time limit.
+- `--stop-after-win`: stop on a confirmed win before the reward flow.
+- `--on-loss pause|exit`: pause indefinitely or write a report and exit.
+- `--capture-limit-mb MB`: cap `runtime/captures/`; the default is 256 MB.
+
 The Windows-style direct USB path can also be tested from a Mac:
 
 ```bash
@@ -184,7 +200,8 @@ Windows power API to prevent the computer from sleeping.
 | Face-down reward cards | Click Show All in the lower-left corner |
 | Card-flip animation | Wait |
 | Reward summary | Click Continue in the lower-right corner |
-| Main menu, network error, insufficient energy, unknown screen | Wait indefinitely for manual intervention |
+| Network error, insufficient energy, full inventory, maintenance, ended event | Stop and notify after a dedicated template or macOS local OCR confirms it |
+| Main menu and other unknown screens | Wait indefinitely for manual intervention |
 
 ## Logs and Privacy
 
@@ -193,6 +210,11 @@ Runtime data is stored under `runtime/`:
 - `runtime/logs/`: per-frame JSONL state and action logs
 - `runtime/captures/`: debug, pause, and pre-click screenshots
 - `runtime/doctor/`: diagnostic screenshots
+- `runtime/reports/`: JSON session summaries written when a run ends
+
+The capture directory is capped at 256 MB by default. After writing a new
+capture, the tool removes the oldest PNGs first and always keeps the newest
+file. `--debug` saves only stable state changes.
 
 These files may contain player names, lineups, resource counts, notification
 text, and complete phone mirror frames. The repository ignores `runtime/`.
@@ -212,6 +234,15 @@ python -m compileall -q rtc_bot tests tools
 python -m pip check
 ```
 
+The latest live validation ran on July 23, 2026 in `live` mode with a 15-minute
+limit. Its session report recorded 1,797 frames and eight allowlisted clicks,
+then stopped normally after 902.4 seconds because the 900-second limit was
+reached. The run produced a JSON session summary and 109 captures, while
+`runtime/captures/` remained within its configured 256 MB cap. The report
+recorded zero wins and zero losses, so this validates real clicks, bounded
+stopping, session reports, and capture retention, but not result-screen or
+exception-OCR handling.
+
 Replay a recording offline:
 
 ```bash
@@ -228,10 +259,12 @@ rtc_bot/
   bridge.py       Cross-platform backend interface and selection
   cli.py          Command-line interface and runtime loop
   engine.py       Stable-frame, cooldown, state-change, and action decisions
+  exceptions.py   Local OCR and known exception-message classification
   ios_device.py   Direct iPhone USB capture and touch events
   macos.py        iPhone Mirroring capture and mouse events
+  session.py      Game, duration, outcome, and stop policies
   vision.py       Local template, color, and layout recognition
-  runtime.py      JSONL logs, screenshots, notifications, and sleep prevention
+  runtime.py      JSONL logs, bounded captures, reports, notifications, and sleep prevention
   assets/         Runtime recognition templates
 tests/            Unit tests, flow tests, and redacted fixtures
 tools/            Offline replay and asset-sanitization tools
@@ -245,9 +278,12 @@ tools/            Offline replay and asset-sanitization tools
   may reduce recognition accuracy.
 - Dedicated samples are not yet available for every network error,
   insufficient-energy, inventory-limit, maintenance, and event-ended screen.
-  The default behavior is to wait for manual intervention.
+  On macOS, local text recognition and English/Chinese keywords supplement
+  detection. The Windows USB backend waits for manual intervention when no
+  dedicated template matches.
 - A click is canceled if the iPhone Mirroring window disappears, is minimized,
-  produces a black frame, or moves after recognition.
+  produces a black frame, or moves after recognition. The USB backend also
+  cancels a touch if the device identity or capture dimensions change.
 - The Windows USB backend has not completed a real Windows+iPhone acceptance
   test. CI covers installation, imports, and simulated device flow only.
 - The USB backend requires iOS Developer Mode and a mounted Developer Disk
