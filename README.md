@@ -247,9 +247,94 @@ rtc_bot/
   vision.py       本地模板、颜色和布局识别
   runtime.py      JSONL 日志、受限截图、报告、通知和防休眠
   assets/         运行时识别模板
+nba2k_web/        网页 Webstore 每日奖励自动领取（Playwright）
 tests/            单元测试、流程测试和脱敏夹具
 tools/            离线回放与素材清理工具
 ```
+
+## 网页每日奖励自动领取（nba2k-web）
+
+独立于 `rtc_bot` 的网页自动化，用 Playwright 模拟浏览器，在 NBA 2K Mobile
+Webstore（`www.nba2kmobile.com`）每日领取两个免费奖励：
+
+1. 首页底部的 **Free Gift**（免费商品）。
+2. **Daily Streak**（`/dailystreak`）每日累计登录奖励，7 天一轮，第 7 天含日常
+   奖励与最终大奖两个。
+
+登录靠 **Player ID**（无密码的「验证 Player ID」流程），登录后会话保存为本地
+`storage_state`，日常无头运行自动复用。
+
+### 安装
+
+```bash
+python -m pip install -e ".[web]"
+python -m playwright install chromium
+```
+
+### 首次登录（有头）
+
+```bash
+nba2k-web login --player-id <你的 Player ID>
+```
+
+会打开浏览器，自动输入 Player ID 完成验证；若自动流程未命中，浏览器保持打开，
+你手动完成后回到终端按回车保存会话。Player ID 与登录会话保存在 `runtime/web/`
+（已被 Git 忽略，不会上传）。
+
+### 每日领取（无头）
+
+```bash
+nba2k-web claim
+```
+
+领取 daily streak 与首页 Free Gift，结果写入 `runtime/web/reports/`；失败时发送
+本机通知。重复运行是幂等的——已领取或未解锁的奖励会被跳过。
+
+其他命令：
+
+```bash
+nba2k-web doctor                 # 检查浏览器内核、Player ID、会话状态
+nba2k-web claim --headed         # 有头运行，便于观察
+python -m nba2k_web claim        # 未重装入口时的等价写法
+```
+
+### 每日定时（macOS launchd）
+
+把下面的 `plist` 保存为 `~/Library/LaunchAgents/com.nba2k.webclaim.plist`，改好
+仓库路径后加载：
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.nba2k.webclaim</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/绝对路径/nba2kmobile/.venv/bin/python</string>
+    <string>-m</string>
+    <string>nba2k_web</string>
+    <string>claim</string>
+  </array>
+  <key>WorkingDirectory</key><string>/绝对路径/nba2kmobile</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>9</integer>
+    <key>Minute</key><integer>7</integer>
+  </dict>
+  <key>StandardOutPath</key><string>/tmp/nba2k-webclaim.log</string>
+  <key>StandardErrorPath</key><string>/tmp/nba2k-webclaim.log</string>
+</dict>
+</plist>
+```
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.nba2k.webclaim.plist
+```
+
+> 与游戏内自动化同样，网页领取属于对免费奖励的自动操作，使用前请自行评估与商店
+> 服务条款的合规性。
 
 ## 已知限制
 

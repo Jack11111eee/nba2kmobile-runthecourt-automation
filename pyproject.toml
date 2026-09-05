@@ -31,15 +31,19 @@ ios-usb = [
   "cryptography==44.0.1",
   "pymobiledevice3==9.34.0",
 ]
+web = [
+  "playwright==1.62.0",
+]
 
 [project.urls]
 Repository = "https://github.com/Jack11111eee/nba2kmobile-runthecourt-automation"
 
 [project.scripts]
 rtc-bot = "rtc_bot.cli:main"
+nba2k-web = "nba2k_web.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["rtc_bot*"]
+include = ["rtc_bot*", "nba2k_web*"]
 
 [tool.setuptools.package-data]
 rtc_bot = ["assets/reference/*.jpg"]
