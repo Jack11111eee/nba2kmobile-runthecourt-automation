@@ -5,8 +5,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
+try:
+    from nba2k_web.session import complete_login, is_logged_in
+except ImportError:
+    complete_login = is_logged_in = None
+
 from nba2k_web.config import WebConfig, load_player_id, save_player_id
-from nba2k_web.session import complete_login, is_logged_in
 
 
 class FakeLocator:
@@ -79,6 +83,7 @@ class FakePage:
         return None
 
 
+@unittest.skipIf(complete_login is None, "playwright 未安装（需要 .[web] extra）")
 class LoginTests(unittest.TestCase):
     def test_is_logged_in_detects_cookie(self) -> None:
         self.assertTrue(is_logged_in(FakePage(logged_in=True)))
