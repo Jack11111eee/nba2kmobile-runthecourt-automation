@@ -3,7 +3,11 @@ from __future__ import annotations
 import unittest
 
 from nba2k_web.config import WebConfig
-from nba2k_web.rewards import claim_all
+
+try:
+    from nba2k_web.rewards import claim_all
+except ImportError:
+    claim_all = None
 
 DAILY_STREAK_URL = "https://www.nba2kmobile.com/dailystreak"
 HOME_URL = "https://www.nba2kmobile.com"
@@ -57,6 +61,7 @@ class FakePage:
         return self.body_text
 
 
+@unittest.skipIf(claim_all is None, "playwright 未安装（需要 .[web] extra）")
 class ClaimAllTests(unittest.TestCase):
     def test_clicks_enabled_claim_buttons_and_skips_locked_and_buy(self) -> None:
         daily = [
